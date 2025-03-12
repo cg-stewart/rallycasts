@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Server=db;Database=rallycasts;User=sa;Password=YourStrong!Passw0rd;
+      - AWS__Region=us-east-1
+      - AWS__Profile=local
+      - AWS__CognitoUserPoolId=local_user_pool
+      - AWS__CognitoAppClientId=local_app_client
+      - AWS__S3BucketName=rallycasts-local
+    depends_on:
+      - db
+      - localstack
+    networks:
+      - rallycasts-network
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong!Passw0rd
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    networks:
+      - rallycasts-network
+
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,cognito,ses,sns,sqs
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+    volumes:
+      - ./localstack-init:/docker-entrypoint-initaws.d
+      - localstack-data:/tmp/localstack
+    networks:
+      - rallycasts-network
+
+  tests:
+    build:
+      context: ./apps
+      dockerfile: api.Tests/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Testing
+    depends_on:
+      - db
+      - localstack
+    networks:
+      - rallycasts-network
+    volumes:
+      - ./test-results:/testresults
+
+networks:
+  rallycasts-network:
+    driver: bridge
+
+volumes:
+  mssql-data:
+  localstack-data:

@@ -1,0 +1,167 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '6.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore ./apps/api/api.csproj
+    
+    - name: Build
+      run: dotnet build ./apps/api/api.csproj --no-restore
+    
+    - name: Test
+      run: dotnet test ./apps/api.Tests/api.Tests.csproj --no-build --verbosity normal
+    
+    - name: Publish
+      if: github.event_name != 'pull_request'
+      run: dotnet publish ./apps/api/api.csproj -c Release -o ./publish
+    
+    - name: Upload artifact
+      if: github.event_name != 'pull_request'
+      uses: actions/upload-artifact@v3
+      with:
+        name: api-artifact
+        path: ./publish
+
+  deploy-development:
+    needs: build
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.event.inputs.environment == 'development')
+    runs-on: ubuntu-latest
+    environment: development
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Download artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: api-artifact
+        path: ./publish
+    
+    - name: Setup AWS CLI
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.DEV_AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.DEV_AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Apply Terraform - Development
+      run: |
+        cd terraform
+        terraform init
+        terraform workspace select development || terraform workspace new development
+        terraform apply -auto-approve -var-file=environments/development.tfvars
+    
+    - name: Run database migrations
+      run: |
+        chmod +x ./scripts/run-migrations.sh
+        ./scripts/run-migrations.sh development
+    
+    - name: Deploy to AWS ECS
+      run: |
+        chmod +x ./scripts/deploy.sh
+        ./scripts/deploy.sh development
+
+  deploy-staging:
+    needs: build
+    if: github.event.inputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Download artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: api-artifact
+        path: ./publish
+    
+    - name: Setup AWS CLI
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.STAGING_AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.STAGING_AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Apply Terraform - Staging
+      run: |
+        cd terraform
+        terraform init
+        terraform workspace select staging || terraform workspace new staging
+        terraform apply -auto-approve -var-file=environments/staging.tfvars
+    
+    - name: Run database migrations
+      run: |
+        chmod +x ./scripts/run-migrations.sh
+        ./scripts/run-migrations.sh staging
+    
+    - name: Deploy to AWS ECS
+      run: |
+        chmod +x ./scripts/deploy.sh
+        ./scripts/deploy.sh staging
+
+  deploy-production:
+    needs: build
+    if: github.event.inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Download artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: api-artifact
+        path: ./publish
+    
+    - name: Setup AWS CLI
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Apply Terraform - Production
+      run: |
+        cd terraform
+        terraform init
+        terraform workspace select production || terraform workspace new production
+        terraform apply -auto-approve -var-file=environments/production.tfvars
+    
+    - name: Run database migrations
+      run: |
+        chmod +x ./scripts/run-migrations.sh
+        ./scripts/run-migrations.sh production
+    
+    - name: Deploy to AWS ECS
+      run: |
+        chmod +x ./scripts/deploy.sh
+        ./scripts/deploy.sh production
